@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"html/template"
 	"os"
+	"regexp"
 
 	"github.com/mlabouardy/nexus-cli/registry"
 	"github.com/urfave/cli"
@@ -88,7 +89,14 @@ func main() {
 						cli.StringFlag{
 							Name: "keep, k",
 						},
+						cli.StringFlag{
+							Name: "tag-filter",
+						},
+						cli.BoolFlag{
+							Name: "try-run",
+						},
 					},
+
 					Action: func(c *cli.Context) error {
 						return deleteImage(c)
 					},
@@ -219,13 +227,27 @@ func showImageInfo(c *cli.Context) error {
 	return nil
 }
 
+func tagFilter(tags []string, filter string) []string {
+	filtered := make([]string, 0)
+	for _, v := range tags {
+		// "^(alpha-)?[0-9]{14}"
+		// "^production-[0-9]{14}"
+		if matched, _ := regexp.MatchString(filter, v); matched {
+			filtered = append(filtered, v)
+		}
+	}
+	return filtered
+}
+
 func deleteImage(c *cli.Context) error {
 	var imgName = c.String("name")
 	var tag = c.String("tag")
 	var keep = c.Int("keep")
+	var filter = c.String("tag-filter")
+	var tryRun = c.Bool("try-run")
 	if imgName == "" {
 		fmt.Fprintf(c.App.Writer, "You should specify the image name\n")
-		cli.ShowSubcommandHelp(c)
+		_ = cli.ShowSubcommandHelp(c)
 	} else {
 		r, err := registry.NewRegistry()
 		if err != nil {
@@ -234,12 +256,17 @@ func deleteImage(c *cli.Context) error {
 		if tag == "" {
 			if keep == 0 {
 				fmt.Fprintf(c.App.Writer, "You should either specify the tag or how many images you want to keep\n")
-				cli.ShowSubcommandHelp(c)
+				_ = cli.ShowSubcommandHelp(c)
 			} else {
 				tags, err := r.ListTagsByImage(imgName)
+
 				compareStringNumber := func(str1, str2 string) bool {
 					return extractNumberFromString(str1) < extractNumberFromString(str2)
 				}
+				if filter != "" {
+					tags = tagFilter(tags, filter)
+				}
+
 				Compare(compareStringNumber).Sort(tags)
 				if err != nil {
 					return cli.NewExitError(err.Error(), 1)
@@ -247,7 +274,9 @@ func deleteImage(c *cli.Context) error {
 				if len(tags) >= keep {
 					for _, tag := range tags[:len(tags)-keep] {
 						fmt.Printf("%s:%s image will be deleted ...\n", imgName, tag)
-						r.DeleteImageByTag(imgName, tag)
+						if !tryRun {
+							_ = r.DeleteImageByTag(imgName, tag)
+						}
 					}
 				} else {
 					fmt.Printf("Only %d images are available\n", len(tags))
